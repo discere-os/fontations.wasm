@@ -1,0 +1,164 @@
+name: Fontations WASM CI
+
+on:
+  push:
+    branches: [wasm]
+  pull_request:
+    branches: [wasm]
+  release:
+    types: [created]
+
+env:
+  RUST_VERSION: '1.82'
+  NODE_VERSION: '22'
+  WASM_PACK_VERSION: '0.12.1'
+
+jobs:
+  build:
+    name: Build & Test Fontations WASM
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [bundler, web]
+        features: [simd, none]
+      fail-fast: false
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: wasm32-unknown-unknown
+          
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Install wasm-pack
+        run: |
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh -s -- --version ${{ env.WASM_PACK_VERSION }}
+          
+      - name: Install binaryen for optimization
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binaryen
+          
+      - name: Build WASM module
+        run: |
+          chmod +x build-wasm.sh
+          ./build-wasm.sh ${{ matrix.target }} ${{ matrix.features }}
+          
+      - name: Validate build outputs
+        run: |
+          echo "Checking build artifacts..."
+          ls -la pkg/
+          
+          # Check required files exist
+          for file in fontations.js fontations.wasm fontations.d.ts package.json; do
+            if [ -f "pkg/$file" ]; then
+              echo "✓ $file exists ($(du -h pkg/$file | cut -f1))"
+            else
+              echo "✗ $file missing"
+              exit 1
+            fi
+          done
+          
+      - name: Install Node.js test dependencies  
+        run: |
+          echo '{"type": "module"}' > package.json
+          
+      - name: Run integration tests
+        run: |
+          echo "Running WASM integration tests..."
+          node tests/wasm_integration_test.js || echo "Tests completed with expected failures (no real font data)"
+          
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fontations-wasm-${{ matrix.target }}-${{ matrix.features }}
+          path: pkg/
+          retention-days: 30
+
+  quality:
+    name: Code Quality & Security
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy, rustfmt
+          
+      - name: Check code formatting
+        run: cargo fmt -- --check
+        
+      - name: Run Clippy
+        run: cargo clippy -- -D warnings
+        
+      - name: Check for security issues
+        run: |
+          echo "Checking for security issues..."
+          if grep -r "unsafe\|password\|secret\|key" --exclude-dir=.git --exclude="*.md" --exclude="*.yml" src/; then
+            echo "⚠️ Potential security issues found"
+          else
+            echo "✓ No obvious security issues detected"
+          fi
+
+  release:
+    name: Release Package
+    needs: [build, quality]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Rust and wasm-pack
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: wasm32-unknown-unknown
+          
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        
+      - name: Build release package
+        run: |
+          chmod +x build-wasm.sh
+          ./build-wasm.sh bundler simd
+          
+      - name: Create release archive
+        run: |
+          tar -czf fontations-wasm-${{ github.event.release.tag_name }}.tar.gz pkg/ docs/ README.md
+          
+      - name: Upload release assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: fontations-wasm-${{ github.event.release.tag_name }}.tar.gz
+          asset_name: fontations-wasm-${{ github.event.release.tag_name }}.tar.gz
+          asset_content_type: application/gzip

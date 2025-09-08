@@ -1,0 +1,68 @@
+# WASM-specific Cargo.toml for fontations
+[package]
+name = "fontations-wasm"
+version = "0.37.0" 
+edition = "2021"
+description = "Modern Rust-based font processing library for WebAssembly"
+authors = ["superstruct ltd, New Zealand"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/superstruct/superstruct"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+  "console",
+  "Performance",
+  "Worker",
+  "Blob",
+  "Response",
+  "Headers",
+  "Request"
+]}
+serde = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+
+# Core fontations dependencies
+font-types = { workspace = true, features = ["serde", "bytemuck"] }
+read-fonts = { workspace = true, features = ["std", "serde"] }
+skrifa = { workspace = true, features = ["std"] }
+write-fonts = { workspace = true }
+
+# Optional dependencies for advanced features
+kurbo = { workspace = true, optional = true }
+
+[features]
+default = ["console_error_panic_hook", "read-fonts", "basic-shaping"]
+console_error_panic_hook = ["dep:console_error_panic_hook"]
+
+# Core font processing features
+read-fonts = []
+write-fonts = ["dep:write-fonts"]
+basic-shaping = []
+advanced-shaping = ["skrifa/std"]
+
+# Performance optimization features  
+simd = []  # SIMD acceleration for font processing
+webgpu = ["web-sys/gpu"]  # WebGPU integration
+streaming = ["web-sys/streams"]  # Streaming API support
+geometry = ["kurbo"]  # Advanced geometry operations
+
+# Development and debugging features
+debug-logging = ["console_error_panic_hook"]
+detailed-errors = []
+
+[dependencies.wasm-bindgen]
+version = "0.2"
+features = [
+  "serde-serialize",
+  "enable-interning"
+]
+
+[package.metadata.wasm-pack.profile.release]
+wee-alloc = false  # Use standard allocator for better performance
